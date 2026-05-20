@@ -1,4 +1,11 @@
-<!DOCTYPE html>
+<!DOCTYPE html>function filtrarNomina() {
+  var filtro = (document.getElementById('filtroNomina').value || '').toLowerCase().trim();
+  var filas  = document.querySelectorAll('#nomina-tbody tr');
+  filas.forEach(function(fila) {
+    var nombre = (fila.cells[0] ? fila.cells[0].textContent : '').toLowerCase();
+    fila.style.display = (!filtro || nombre.includes(filtro)) ? '' : 'none';
+  });
+}
 <html lang="es">
 <head>
 <meta charset="UTF-8">
