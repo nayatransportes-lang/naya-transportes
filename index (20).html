@@ -7356,4 +7356,66 @@ if(_showTabOrigFC){
 </script>
 
 </body>
+  // ─── Sincronización del Flujo de Caja con la Nube ──────────────
+(function() {
+    const FC_KEY = 'naya_flujo_caja_v1';
+    const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxTeDt60Cg-AVibjMChZBz2YWFzEW8hdd27vmaGJjE8YrI1RDlTKvhgf3ONpY0Z0i98/exec';
+
+    // Sobrescribir fcSaveAll para guardar en localStorage y en la nube
+    const originalFcSaveAll = window.fcSaveAll;
+    if (originalFcSaveAll) {
+        window.fcSaveAll = function(arr) {
+            // 1. Guardar localmente
+            originalFcSaveAll(arr);
+            // 2. Sincronizar con la nube
+            try {
+                fetch(SCRIPT_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: 'kvSet',
+                        key: FC_KEY,
+                        value: JSON.stringify(arr)
+                    })
+                }).catch(e => console.warn('[FC] Error al sincronizar con la nube:', e));
+            } catch(e) {}
+        };
+    }
+
+    // Cargar desde la nube al iniciar (reemplaza los datos locales)
+    function syncFlujoCaja() {
+        if (!SCRIPT_URL) return;
+        fetch(SCRIPT_URL + '?action=kvGet&key=' + FC_KEY + '&t=' + Date.now())
+            .then(r => r.json())
+            .then(res => {
+                if (res && res.data) {
+                    const data = JSON.parse(res.data);
+                    if (Array.isArray(data) && data.length) {
+                        // 1. Guardar en localStorage
+                        if (window.storage && window.storage._set) {
+                            window.storage._set(FC_KEY, JSON.stringify(data));
+                        } else {
+                            localStorage.setItem(FC_KEY, JSON.stringify(data));
+                        }
+                        // 2. Re-renderizar la tabla
+                        if (typeof fcRender === 'function') {
+                            setTimeout(fcRender, 100);
+                        }
+                        console.log('[FC] Datos sincronizados desde la nube:', data.length, 'movimientos');
+                    }
+                }
+            })
+            .catch(e => console.warn('[FC] Error al sincronizar desde la nube:', e));
+    }
+
+    // Ejecutar sync al cargar la página y cada 60 segundos
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => {
+            setTimeout(syncFlujoCaja, 500);
+        });
+    } else {
+        setTimeout(syncFlujoCaja, 500);
+    }
+    setInterval(syncFlujoCaja, 60000);
+})();
 </html>
