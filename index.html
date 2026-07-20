@@ -7418,4 +7418,383 @@ if(_showTabOrigFC){
     }
     setInterval(syncFlujoCaja, 60000);
 })();
+  / ═══════════════════════════════════════════════════════════════════
+//  OPTIMIZACIONES PROFESIONALES — SIN ELIMINAR NADA EXISTENTE
+// ═══════════════════════════════════════════════════════════════════
+
+(function() {
+    'use strict';
+
+    // ─── 1. SISTEMA DE RENDERIZADO PERESOZO (Lazy Loading) ──────────────
+    const _tabRenderState = {};
+    const _tabRenderMap = {
+        'carga': () => { /* Ya renderizado por defecto */ },
+        'registros': () => { if (typeof renderRegistros === 'function') renderRegistros(); },
+        'resumen': () => { if (typeof renderResumen === 'function') renderResumen(); },
+        'empleados': () => { 
+            if (typeof renderEmpleados === 'function') renderEmpleados(); 
+            if (typeof renderNomina === 'function') { renderNomina(); setTimeout(filtrarNominaTabla, 80); }
+        },
+        'tarifario': () => { if (typeof renderTarifario === 'function') renderTarifario(); },
+        'liquidacion': () => { if (typeof renderLiquidacion === 'function') renderLiquidacion(); },
+        'facturacion': () => { 
+            if (typeof renderFacturas === 'function') renderFacturas(); 
+            if (typeof roccaLoadTotal === 'function') roccaLoadTotal();
+            if (typeof renderRoccaCalc === 'function') renderRoccaCalc();
+        },
+        'totales': () => { 
+            if (typeof renderTotales === 'function') renderTotales(); 
+            if (typeof loadCostosFijos === 'function') loadCostosFijos();
+            if (typeof recalcCostosFijos === 'function') recalcCostosFijos();
+        },
+        'gastos': () => { if (typeof fcRender === 'function') setTimeout(fcRender, 50); },
+        'fichas': () => { if (typeof renderFichasTab === 'function') renderFichasTab(); },
+        'arreglos': () => { if (typeof renderArreglos === 'function') renderArreglos(); },
+        'simulador': () => { if (typeof renderSimulador === 'function') renderSimulador(); }
+    };
+
+    // Sobrescribir showTab con lazy loading
+    const _originalShowTab = window.showTab;
+    if (typeof _originalShowTab === 'function') {
+        window.showTab = function(tabName) {
+            // Cambiar pestaña
+            _originalShowTab(tabName);
+            
+            // Renderizar solo si no se ha hecho antes
+            if (!_tabRenderState[tabName]) {
+                _tabRenderState[tabName] = true;
+                if (_tabRenderMap[tabName]) {
+                    // Pequeño delay para que la UI se actualice primero
+                    setTimeout(_tabRenderMap[tabName], 30);
+                }
+            }
+        };
+    }
+
+    // ─── 2. SISTEMA DE NOTIFICACIONES TOAST PREMIUM ─────────────────────
+    const toastContainer = document.createElement('div');
+    toastContainer.id = 'naya-toast-container';
+    toastContainer.style.cssText = `
+        position: fixed; bottom: 24px; right: 24px; z-index: 99999;
+        display: flex; flex-direction: column; gap: 10px;
+        max-width: 420px; width: 100%;
+        pointer-events: none;
+    `;
+    document.body.appendChild(toastContainer);
+
+    window.nayaToast = function(message, type = 'success', duration = 3500) {
+        const toast = document.createElement('div');
+        const colors = {
+            success: { bg: '#D8F3DC', border: '#A8DABC', icon: '✅', text: '#2D6A4F' },
+            error: { bg: '#FDECEA', border: '#F5C0C0', icon: '❌', text: '#9B2335' },
+            loading: { bg: '#FEF0E0', border: '#F5CBA0', icon: '⏳', text: '#B5520A' },
+            info: { bg: '#E9F0FF', border: '#B3CCFF', icon: 'ℹ️', text: '#0B5FFF' }
+        };
+        const style = colors[type] || colors.info;
+
+        toast.style.cssText = `
+            background: ${style.bg}; border: 1px solid ${style.border};
+            border-radius: 10px; padding: 14px 18px;
+            font-family: 'IBM Plex Sans', sans-serif; font-size: 13px;
+            color: ${style.text}; box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+            transform: translateX(30px); opacity: 0;
+            transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+            pointer-events: auto;
+            display: flex; align-items: center; gap: 10px;
+            backdrop-filter: blur(4px);
+        `;
+        toast.innerHTML = `<span style="font-size:18px">${style.icon}</span><span>${message}</span>`;
+
+        // Barra de progreso
+        const progress = document.createElement('div');
+        progress.style.cssText = `
+            position: absolute; bottom: 0; left: 0; height: 3px;
+            background: ${style.text}; border-radius: 0 0 10px 10px;
+            width: 100%; transition: width ${duration}ms linear;
+        `;
+        toast.style.position = 'relative';
+        toast.appendChild(progress);
+
+        toastContainer.appendChild(toast);
+
+        // Animar entrada
+        requestAnimationFrame(() => {
+            toast.style.transform = 'translateX(0)';
+            toast.style.opacity = '1';
+        });
+
+        // Auto-cerrar
+        const timer = setTimeout(() => {
+            toast.style.transform = 'translateX(30px)';
+            toast.style.opacity = '0';
+            setTimeout(() => toast.remove(), 300);
+        }, duration);
+
+        // Clic para cerrar
+        toast.addEventListener('click', () => {
+            clearTimeout(timer);
+            toast.style.transform = 'translateX(30px)';
+            toast.style.opacity = '0';
+            setTimeout(() => toast.remove(), 300);
+        });
+
+        return toast;
+    };
+
+    // Reemplazar showAlert con toast
+    const _originalShowAlert = window.showAlert;
+    if (typeof _originalShowAlert === 'function') {
+        window.showAlert = function(msg, type = 'success', dur = 3500) {
+            // Si es loading, usar el spinner
+            if (type === 'loading') {
+                nayaToast(msg, 'loading', dur || 6000);
+                return;
+            }
+            nayaToast(msg, type, dur);
+        };
+    }
+
+    // ─── 3. AUTO-GUARDADO CON INDICADOR VISUAL ──────────────────────────
+    // Para los inputs de nómina y tarifario
+    let _saveTimeout = null;
+    const _saveIndicator = document.createElement('div');
+    _saveIndicator.id = 'naya-saving-indicator';
+    _saveIndicator.style.cssText = `
+        position: fixed; bottom: 80px; right: 24px;
+        background: #1A1917; color: #fff;
+        font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+        padding: 8px 16px; border-radius: 8px;
+        display: flex; align-items: center; gap: 8px;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+        z-index: 99998;
+        opacity: 0; transform: translateY(8px);
+        transition: opacity 0.2s ease, transform 0.2s ease;
+        pointer-events: none;
+    `;
+    _saveIndicator.innerHTML = `<span class="spinner" style="width:12px;height:12px;border-color:rgba(255,255,255,0.3);border-top-color:#fff"></span> Guardando...`;
+    document.body.appendChild(_saveIndicator);
+
+    window.nayaShowSaving = function(show) {
+        if (show) {
+            _saveIndicator.style.opacity = '1';
+            _saveIndicator.style.transform = 'translateY(0)';
+            clearTimeout(_saveTimeout);
+        } else {
+            _saveTimeout = setTimeout(() => {
+                _saveIndicator.style.opacity = '0';
+                _saveIndicator.style.transform = 'translateY(8px)';
+            }, 400);
+        }
+    };
+
+    // ─── 4. OPTIMIZACIÓN DE BÚSQUEDA Y FILTRADO ──────────────────────────
+    // Debounce global mejorado
+    if (typeof window.nayaDebounce !== 'function') {
+        const _debounceTimers = {};
+        window.nayaDebounce = function(key, fn, delay = 250) {
+            clearTimeout(_debounceTimers[key]);
+            _debounceTimers[key] = setTimeout(fn, delay);
+        };
+    }
+
+    // ─── 5. SKELETON LOADING PARA TABLAS ────────────────────────────────
+    window.nayaSkeletonRows = function(count = 5, cols = 6) {
+        let html = '';
+        for (let i = 0; i < count; i++) {
+            html += '<tr>';
+            for (let j = 0; j < cols; j++) {
+                html += `<td style="padding:12px 10px">
+                    <div style="height:14px;background:linear-gradient(90deg,#EEECEA 25%,#E5E3DF 50%,#EEECEA 75%);background-size:200% 100%;border-radius:4px;animation:shimmer 1.5s infinite"></div>
+                </td>`;
+            }
+            html += '</tr>';
+        }
+        // Añadir keyframes si no existen
+        if (!document.getElementById('naya-shimmer-style')) {
+            const style = document.createElement('style');
+            style.id = 'naya-shimmer-style';
+            style.textContent = `
+                @keyframes shimmer {
+                    0% { background-position: 200% 0; }
+                    100% { background-position: -200% 0; }
+                }
+            `;
+            document.head.appendChild(style);
+        }
+        return html;
+    };
+
+    // ─── 6. ATAJOS DE TECLADO ─────────────────────────────────────────────
+    document.addEventListener('keydown', function(e) {
+        // Ctrl+Enter en el formulario de carga
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            const active = document.activeElement;
+            if (active && active.closest('#tab-carga')) {
+                if (typeof guardarViaje === 'function') {
+                    e.preventDefault();
+                    guardarViaje();
+                }
+            }
+        }
+        // Escape para cerrar modales
+        if (e.key === 'Escape') {
+            document.querySelectorAll('.modal-overlay.open, #modal-tarifa, #modal-nomina-add, #modal-nomina-del')
+                .forEach(el => {
+                    if (el.style.display === 'flex' || el.classList.contains('open')) {
+                        el.style.display = 'none';
+                        el.classList.remove('open');
+                    }
+                });
+            const quickModal = document.getElementById('arreglo-quick-modal');
+            if (quickModal && quickModal.style.display === 'flex') {
+                quickModal.style.display = 'none';
+            }
+        }
+    });
+
+    // ─── 7. OPTIMIZACIÓN DE GRÁFICOS (Chart.js) ──────────────────────────
+    // Destruir gráficos al cambiar de pestaña para liberar memoria
+    const _chartInstances = [];
+
+    window.nayaRegisterChart = function(chart) {
+        if (chart && typeof chart.destroy === 'function') {
+            _chartInstances.push(chart);
+        }
+        return chart;
+    };
+
+    window.nayaDestroyCharts = function() {
+        _chartInstances.forEach(chart => {
+            try { chart.destroy(); } catch(e) {}
+        });
+        _chartInstances.length = 0;
+        // También destruir instancias globales
+        if (window.dashChartMeses) { try { window.dashChartMeses.destroy(); } catch(e) {} window.dashChartMeses = null; }
+        if (window.dashDonutCarga) { try { window.dashDonutCarga.destroy(); } catch(e) {} window.dashDonutCarga = null; }
+        if (window.totDonutChart) { try { window.totDonutChart.destroy(); } catch(e) {} window.totDonutChart = null; }
+    };
+
+    // Hook en showTab para destruir gráficos
+    if (typeof window.showTab === 'function') {
+        const _origShowTabCharts = window.showTab;
+        window.showTab = function(tabName) {
+            // Destruir gráficos al cambiar de pestaña (excepto si es la misma)
+            if (tabName !== 'resumen' && tabName !== 'totales') {
+                setTimeout(window.nayaDestroyCharts, 50);
+            }
+            _origShowTabCharts(tabName);
+        };
+    }
+
+    // ─── 8. MEJORA DE FILTROS CON ÍNDICES EN MEMORIA ─────────────────────
+    // Para la nómina, construir índice de búsqueda
+    let _nominaIndex = [];
+
+    function nayaBuildNominaIndex() {
+        const rows = document.querySelectorAll('#nomina-tbody tr');
+        _nominaIndex = Array.from(rows).map(row => {
+            const cells = row.querySelectorAll('td');
+            return {
+                element: row,
+                text: Array.from(row.querySelectorAll('td, input')).map(el => 
+                    (el.textContent || el.value || '').toLowerCase()
+                ).join(' ')
+            };
+        });
+        return _nominaIndex;
+    }
+
+    // Mejorar filtrarNominaTabla con índice
+    if (typeof window.filtrarNominaTabla === 'function') {
+        const _origFiltrar = window.filtrarNominaTabla;
+        window.filtrarNominaTabla = function() {
+            // Reconstruir índice si es necesario
+            if (!_nominaIndex.length || _nominaIndex.length !== document.querySelectorAll('#nomina-tbody tr').length) {
+                nayaBuildNominaIndex();
+            }
+            const query = (document.getElementById('nf-buscar')?.value || '').toLowerCase().trim();
+            const cargo = (document.getElementById('nf-cargo')?.value || '').toLowerCase();
+            const estado = (document.getElementById('nf-estado')?.value || '');
+
+            let visible = 0;
+            _nominaIndex.forEach(item => {
+                let match = true;
+                if (query && !item.text.includes(query)) match = false;
+                if (match && cargo) {
+                    const cargoCell = item.element.cells[1];
+                    if (cargoCell && !cargoCell.textContent.toLowerCase().includes(cargo)) match = false;
+                }
+                if (match && estado) {
+                    const fInicio = item.element.querySelector('input[id$="-finicio"]');
+                    const hasDate = fInicio && fInicio.value.trim() !== '';
+                    if (estado === 'activo' && !hasDate) match = false;
+                    if (estado === 'inactivo' && hasDate) match = false;
+                }
+                item.element.style.display = match ? '' : 'none';
+                if (match) visible++;
+            });
+
+            const counter = document.getElementById('nf-contador');
+            if (counter) counter.textContent = visible;
+
+            const empty = document.getElementById('nomina-empty-state');
+            if (empty) {
+                const total = document.querySelectorAll('#nomina-tbody tr').length;
+                empty.style.display = (visible === 0 && total > 0) ? 'block' : 'none';
+            }
+        };
+    }
+
+    // ─── 9. MEJORA DE SINCRO — ACTUALIZACIÓN INTELIGENTE ────────────────
+    // Evitar re-renderizados innecesarios
+    let _lastSyncData = '';
+    let _syncCount = 0;
+
+    if (window.storage && typeof window.storage._syncAll === 'function') {
+        const _origSync = window.storage._syncAll;
+        window.storage._syncAll = function() {
+            return _origSync.call(this).then(function(ok) {
+                _syncCount++;
+                // Solo re-renderizar si cambió algo
+                try {
+                    const currentData = JSON.stringify(cache || []);
+                    if (currentData !== _lastSyncData) {
+                        _lastSyncData = currentData;
+                        if (typeof renderRegistros === 'function') {
+                            renderRegistros(true);
+                        }
+                    }
+                } catch(e) {}
+                return ok;
+            });
+        };
+    }
+
+    // ─── 10. PROFESSIONAL TOUCH — BADGE DE VERSIÓN ──────────────────────
+    const versionBadge = document.createElement('div');
+    versionBadge.style.cssText = `
+        position: fixed; bottom: 12px; left: 12px;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 9px; color: rgba(26,25,23,0.25);
+        letter-spacing: 0.04em;
+        z-index: 50;
+        pointer-events: none;
+        user-select: none;
+    `;
+    versionBadge.textContent = 'NAYA v3.0 · Optimizado';
+    document.body.appendChild(versionBadge);
+
+    // ─── 11. INICIALIZACIÓN RÁPIDA ──────────────────────────────────────
+    // Cargar primera pestaña activa
+    const activeTab = document.querySelector('.panel.active');
+    if (activeTab) {
+        const tabId = activeTab.id.replace('tab-', '');
+        if (tabId && _tabRenderMap[tabId]) {
+            _tabRenderState[tabId] = true;
+            setTimeout(_tabRenderMap[tabId], 100);
+        }
+    }
+
+    console.log('🚀 NAYA TRANSPORTES — Optimizaciones profesionales activas');
+})();
 </html>
